@@ -21,3 +21,5 @@ class OutreachInput(BaseModel):
  cluster_id:int=Field(ge=0,le=5)
  title:str=Field(min_length=2,max_length=100)
  note:str=Field(min_length=8,max_length=2000)
+class PurgeInput(BaseModel):
+ code:str=Field(min_length=1,max_length=60)

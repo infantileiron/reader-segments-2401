@@ -6,7 +6,7 @@
 
 模拟客户山岚内容社有会员运营组4人、编辑6人，试点240位订阅会员。原流程是运营人员导出 `山岚_会员周阅读_20261109.xlsx`，按阅读次数手工分组，再把名单和选题建议发给编辑。三个痛点是篇数与比例量纲混用、分群名单随工作簿修订漂移、内容建议无法追溯到当时的行为画像。本项目承接上游最近完整自然周的行为聚合，替代手工分组与名单归档，下游由编辑和运营负责人审阅内容主题、渠道假设及频次。
 
-业务模块：阅读档案（录入/完整字段修订）、特征选择（2–3维、k=2–6）、分群图谱（标准化散点、轮廓系数、原始单位画像、群成员）、触达方案（冻结名单、站内起草、负责人签核与导出）。三类核心实体为Reader、Segment、Outreach；另有用户与审计记录。不连接真实会员系统或外发服务。
+业务模块：阅读档案（录入/完整字段修订）、特征选择（2–3维、k=2–6）、分群图谱（标准化散点、轮廓系数、原始单位画像、群成员）、触达方案（冻结名单、站内起草、负责人签核与导出）、数据清除（会员撤回后的永久清除任务）。四类核心实体为Reader、Segment、Outreach、Purge；另有用户与审计记录。不连接真实会员系统或外发服务。
 
 |角色|权限和页面|典型动作|
 |---|---|---|
@@ -35,6 +35,12 @@ Python先用StandardScaler的总体均值和总体标准差生成z=(x−mean)/st
 
 样本数≤k、所选常量列、唯一特征点少于k、实际群数不足、缺失/非有限值均明确失败；不静默补值、降k或删除样本。输入验证422，重复会员编号409，队列故障503。任务失败保存failed和错误原因，修订后新建版本。创建时冻结输入，worker保存成员、中心、画像、轮廓系数、scaler参数、seed和checksum。触达草案保存版本成员副本，不随后续档案修改漂移。分群只描述行为相似性，不判断会员价值或因果关系。
 
+## 会员数据永久清除
+
+会员撤回授权后，在数据清除页选择会员编号发起永久清除任务（analyst/admin，viewer只读）。任务从待清理pending、执行中running到完成done或失败failed，页面实时展示进度、影响范围（涉及的分群版本与触达方案）、失败原因与对账报告。清除范围：阅读档案、所有分群版本的输入快照与成员记录、`/artifacts`成员文件、触达冻结名单中的对应记录。清除不重新聚类：其余会员保留原群号，按训练期scaler参数重算群画像、轮廓系数、inertia与checksum；版本仅记录清除次数用于溯源，不保留被撤会员编号。清除后剩余样本数≤k、有群组为空或不同特征点少于k时，版本明确标为不可分析（analyzable=false并给出原因），群号保留但不构成有效分群结构。
+
+任务完成前，受影响版本与方案暂停查看（结果与名单遮蔽）和导出，并暂停基于受影响版本起草、签核与修订该会员档案、提交新分群；完成后自动恢复。完成后任务执行对账：档案已删、各版本快照/成员/群名单与产物文件均不含该会员且人数自洽、触达剩余名单一致，全部通过才标记done。同一会员的进行中任务由部分唯一索引保证全局唯一，重复发起返回409。分群写回使用条件更新，清除作废的版本不会被并发计算结果覆盖；产物文件先写临时文件再原子替换，写中断不会产生半截JSON。worker重启时将卡住的清除任务重置为pending重新入队，执行全程幂等，失败重试不重复扣减。
+
 ## 快速启动
 
 ```sh
@@ -61,7 +67,9 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 本地开发先启动db/redis，在backend安装requirements，设置DATABASE_URL/REDIS_URL/JWT_SECRET后运行 `uvicorn src.main:app --reload`。前端静态文件通过Nginx同源代理，也可配置本地开发代理。环境变量见.env.example：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO、NETWORK_SUBNET。部署时替换演示凭据与密钥。
 
-共享枚举ROLES、STATES、FEATURES、OUTREACH_STATES在后端src/constants/enums.py和前端src/constants/enums.js；字段约束在schemas/business.py，持久化列在models/entities.py。前端共用table/fields/status，表单hooks和HTML转义utils至少两个工具。
+清除功能的端到端逻辑验证位于 `backend/scripts/verify_purge.py`（SQLite+fakeredis跑真实路由/worker/算法代码）：`cd backend && python3 -m scripts.verify_purge`，覆盖基本清除与对账、暂停查看/导出、重复请求、计算中清除的并发写回防护、写文件中断恢复、重启恢复、失败重试不重复扣减、群数/样本不足标不可分析与权限。
+
+共享枚举ROLES、STATES、FEATURES、OUTREACH_STATES、PURGE_STATES在后端src/constants/enums.py和前端src/constants/enums.js；字段约束在schemas/business.py，持久化列在models/entities.py。前端共用table/fields/status，表单hooks和HTML转义utils至少两个工具。清除任务编排与对账在services/purge.py，清除后重算在services/analysis.py的recalc_after_removal。
 
 ## 范围与证据
 
